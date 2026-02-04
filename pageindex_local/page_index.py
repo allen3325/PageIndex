@@ -993,7 +993,7 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None, 
 
 ################### main process #########################################################
 async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=None, start_index=1, opt=None, logger=None):
-    print(mode)
+    print(f"meta_processor mode: {mode}")
     print(f'start_index: {start_index}')
 
     if mode == 'process_toc_with_page_numbers':
