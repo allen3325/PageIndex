@@ -19,6 +19,7 @@ import logging
 import yaml
 from pathlib import Path
 from types import SimpleNamespace as config
+import random
 
 CHATGPT_API_KEY = os.getenv("CHATGPT_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -34,6 +35,40 @@ def get_provider(model):
         return 'google'
     else:
         return 'openai'
+
+
+def is_rate_limit_error(e, provider):
+    """Check if the exception is a 429 Rate Limit error."""
+    error_str = str(e).lower()
+
+    # Check common rate limit indicators
+    if '429' in str(e) or 'rate' in error_str and 'limit' in error_str:
+        return True
+
+    # Provider-specific checks
+    if provider == 'openai':
+        if isinstance(e, openai.RateLimitError):
+            return True
+    elif provider == 'anthropic':
+        if isinstance(e, anthropic.RateLimitError):
+            return True
+    elif provider == 'google':
+        # Google uses google.api_core.exceptions.ResourceExhausted for rate limits
+        if 'resourceexhausted' in error_str or 'quota' in error_str:
+            return True
+
+    return False
+
+
+def calculate_backoff_delay(attempt, base_delay=1.0, max_delay=60.0):
+    """Calculate exponential backoff delay with jitter."""
+    # Exponential backoff: base_delay * 2^attempt
+    delay = base_delay * (2 ** attempt)
+    # Add random jitter (0-25% of delay)
+    jitter = delay * random.uniform(0, 0.25)
+    delay = delay + jitter
+    # Cap at max_delay
+    return min(delay, max_delay)
 
 def count_tokens(text, model=None):
     if not text:
@@ -231,10 +266,14 @@ async def _gemini_chat_async(model, messages, api_key=None, temperature=0):
 
 
 # Unified API functions
-def LLM_API_with_finish_reason(model, prompt, api_key=None, chat_history=None):
+def LLM_API_with_finish_reason(model, prompt, api_key=None, chat_history=None, opt=None):
     """Unified API call with finish reason support for OpenAI, Anthropic, and Google."""
     max_retries = 10
     provider = get_provider(model)
+
+    # Get retry config from opt or use defaults
+    base_delay = getattr(opt, 'retry_base_delay', 1.0) if opt else 1.0
+    max_delay = getattr(opt, 'retry_max_delay', 60.0) if opt else 60.0
 
     for i in range(max_retries):
         try:
@@ -255,16 +294,25 @@ def LLM_API_with_finish_reason(model, prompt, api_key=None, chat_history=None):
             print('************* Retrying *************')
             logging.error(f"Error: {e}")
             if i < max_retries - 1:
-                time.sleep(1)
+                if is_rate_limit_error(e, provider):
+                    delay = calculate_backoff_delay(i, base_delay, max_delay)
+                    logging.warning(f"Rate limit hit. Waiting {delay:.2f}s before retry {i+1}/{max_retries}")
+                    time.sleep(delay)
+                else:
+                    time.sleep(1)
             else:
                 logging.error('Max retries reached for prompt: ' + prompt)
                 return "Error", "error"
 
 
-def LLM_API(model, prompt, api_key=None, chat_history=None):
+def LLM_API(model, prompt, api_key=None, chat_history=None, opt=None):
     """Unified API call for OpenAI, Anthropic, and Google."""
     max_retries = 10
     provider = get_provider(model)
+
+    # Get retry config from opt or use defaults
+    base_delay = getattr(opt, 'retry_base_delay', 1.0) if opt else 1.0
+    max_delay = getattr(opt, 'retry_max_delay', 60.0) if opt else 60.0
 
     for i in range(max_retries):
         try:
@@ -288,51 +336,72 @@ def LLM_API(model, prompt, api_key=None, chat_history=None):
             print('************* Retrying *************')
             logging.error(f"Error: {e}")
             if i < max_retries - 1:
-                time.sleep(1)
+                if is_rate_limit_error(e, provider):
+                    delay = calculate_backoff_delay(i, base_delay, max_delay)
+                    logging.warning(f"Rate limit hit. Waiting {delay:.2f}s before retry {i+1}/{max_retries}")
+                    time.sleep(delay)
+                else:
+                    time.sleep(1)
             else:
                 logging.error('Max retries reached for prompt: ' + prompt)
                 return "Error"
 
 
-async def LLM_API_async(model, prompt, api_key=None):
+async def LLM_API_async(model, prompt, api_key=None, opt=None, semaphore=None):
     """Unified async API call for OpenAI, Anthropic, and Google."""
     max_retries = 10
     provider = get_provider(model)
     messages = [{"role": "user", "content": prompt}]
 
-    for i in range(max_retries):
-        try:
-            if provider == 'anthropic':
-                return await _anthropic_chat_async(model, messages, api_key)
-            elif provider == 'google':
-                return await _gemini_chat_async(model, messages, api_key)
-            else:
-                return await _openai_chat_async(model, messages, api_key)
+    # Get retry config from opt or use defaults
+    base_delay = getattr(opt, 'retry_base_delay', 1.0) if opt else 1.0
+    max_delay = getattr(opt, 'retry_max_delay', 60.0) if opt else 60.0
 
-        except Exception as e:
-            print('************* Retrying *************')
-            logging.error(f"Error: {e}")
-            if i < max_retries - 1:
-                await asyncio.sleep(1)
-            else:
-                logging.error('Max retries reached for prompt: ' + prompt)
-                return "Error"
+    async def _make_request():
+        for i in range(max_retries):
+            try:
+                if provider == 'anthropic':
+                    return await _anthropic_chat_async(model, messages, api_key)
+                elif provider == 'google':
+                    return await _gemini_chat_async(model, messages, api_key)
+                else:
+                    return await _openai_chat_async(model, messages, api_key)
+
+            except Exception as e:
+                print('************* Retrying *************')
+                logging.error(f"Error: {e}")
+                if i < max_retries - 1:
+                    if is_rate_limit_error(e, provider):
+                        delay = calculate_backoff_delay(i, base_delay, max_delay)
+                        logging.warning(f"Rate limit hit. Waiting {delay:.2f}s before retry {i+1}/{max_retries}")
+                        await asyncio.sleep(delay)
+                    else:
+                        await asyncio.sleep(1)
+                else:
+                    logging.error('Max retries reached for prompt: ' + prompt)
+                    return "Error"
+
+    if semaphore:
+        async with semaphore:
+            return await _make_request()
+    else:
+        return await _make_request()
 
 
 # Backward compatibility aliases
-def ChatGPT_API_with_finish_reason(model, prompt, api_key=None, chat_history=None):
+def ChatGPT_API_with_finish_reason(model, prompt, api_key=None, chat_history=None, opt=None):
     """Backward compatible wrapper - now supports all providers."""
-    return LLM_API_with_finish_reason(model, prompt, api_key, chat_history)
+    return LLM_API_with_finish_reason(model, prompt, api_key, chat_history, opt)
 
 
-def ChatGPT_API(model, prompt, api_key=None, chat_history=None):
+def ChatGPT_API(model, prompt, api_key=None, chat_history=None, opt=None):
     """Backward compatible wrapper - now supports all providers."""
-    return LLM_API(model, prompt, api_key, chat_history)
+    return LLM_API(model, prompt, api_key, chat_history, opt)
 
 
-async def ChatGPT_API_async(model, prompt, api_key=None):
+async def ChatGPT_API_async(model, prompt, api_key=None, opt=None, semaphore=None):
     """Backward compatible wrapper - now supports all providers."""
-    return await LLM_API_async(model, prompt, api_key)  
+    return await LLM_API_async(model, prompt, api_key, opt, semaphore)  
             
             
 def get_json_content(response):
@@ -829,22 +898,44 @@ def add_node_text_with_labels(node, pdf_pages):
     return
 
 
-async def generate_node_summary(node, model=None):
+async def generate_node_summary(node, model=None, opt=None):
     prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
 
     Partial Document Text: {node['text']}
-    
+
     Directly return the description, do not include any other text.
     """
-    response = await ChatGPT_API_async(model, prompt)
+    response = await ChatGPT_API_async(model, prompt, opt=opt)
     return response
 
 
-async def generate_summaries_for_structure(structure, model=None):
+async def generate_summaries_for_structure(structure, model=None, opt=None):
     nodes = structure_to_list(structure)
-    tasks = [generate_node_summary(node, model=model) for node in nodes]
-    summaries = await asyncio.gather(*tasks)
-    
+
+    if opt and not getattr(opt, 'parallel_requests', True):
+        # Sequential execution
+        summaries = []
+        for node in nodes:
+            summary = await generate_node_summary(node, model=model, opt=opt)
+            summaries.append(summary)
+    else:
+        # Parallel execution with concurrency limit
+        max_concurrent = getattr(opt, 'max_concurrent_requests', 10) if opt else 10
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def limited_task(node):
+            async with semaphore:
+                return await generate_node_summary(node, model=model, opt=opt)
+
+        tasks = [limited_task(node) for node in nodes]
+        summaries = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Handle any exceptions
+        for i, summary in enumerate(summaries):
+            if isinstance(summary, Exception):
+                logging.error(f"Error generating summary for node: {summary}")
+                summaries[i] = "Error generating summary"
+
     for node, summary in zip(nodes, summaries):
         node['summary'] = summary
     return structure

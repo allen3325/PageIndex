@@ -38,6 +38,16 @@ if __name__ == "__main__":
                       help='Minimum token threshold for thinning (markdown only)')
     parser.add_argument('--summary-token-threshold', type=int, default=200,
                       help='Token threshold for generating summaries (markdown only)')
+
+    # Parallel request control
+    parser.add_argument('--parallel-requests', type=str, default='yes',
+                      help='Enable parallel LLM requests (yes/no)')
+    parser.add_argument('--max-concurrent-requests', type=int, default=10,
+                      help='Maximum number of concurrent requests')
+    parser.add_argument('--retry-base-delay', type=float, default=1.0,
+                      help='Base delay for retry backoff (seconds)')
+    parser.add_argument('--retry-max-delay', type=float, default=60.0,
+                      help='Maximum delay for retry backoff (seconds)')
     args = parser.parse_args()
     
     # Validate that exactly one file type is specified
@@ -63,7 +73,11 @@ if __name__ == "__main__":
             if_add_node_id=args.if_add_node_id,
             if_add_node_summary=args.if_add_node_summary,
             if_add_doc_description=args.if_add_doc_description,
-            if_add_node_text=args.if_add_node_text
+            if_add_node_text=args.if_add_node_text,
+            parallel_requests=args.parallel_requests.lower() == 'yes',
+            max_concurrent_requests=args.max_concurrent_requests,
+            retry_base_delay=args.retry_base_delay,
+            retry_max_delay=args.retry_max_delay
         )
 
         # Process the PDF
@@ -104,12 +118,16 @@ if __name__ == "__main__":
             'if_add_node_summary': args.if_add_node_summary,
             'if_add_doc_description': args.if_add_doc_description,
             'if_add_node_text': args.if_add_node_text,
-            'if_add_node_id': args.if_add_node_id
+            'if_add_node_id': args.if_add_node_id,
+            'parallel_requests': args.parallel_requests.lower() == 'yes',
+            'max_concurrent_requests': args.max_concurrent_requests,
+            'retry_base_delay': args.retry_base_delay,
+            'retry_max_delay': args.retry_max_delay
         }
-        
+
         # Load config with defaults from config.yaml
         opt = config_loader.load(user_opt)
-        
+
         toc_with_page_number = asyncio.run(md_to_tree(
             md_path=args.md_path,
             if_thinning=args.if_thinning.lower() == 'yes',
@@ -119,7 +137,8 @@ if __name__ == "__main__":
             model=opt.model,
             if_add_doc_description=opt.if_add_doc_description,
             if_add_node_text=opt.if_add_node_text,
-            if_add_node_id=opt.if_add_node_id
+            if_add_node_id=opt.if_add_node_id,
+            opt=opt
         ))
         
         print('Parsing done, saving to file...')
