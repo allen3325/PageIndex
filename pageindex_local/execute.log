@@ -1,0 +1,108 @@
+python run_pageindex.py --pdf_path DeepSeek_R1.pdf --model claude-haiku-4-5-20251001                    ─╯
+
+Parsing PDF...
+start find_toc_pages
+meta_processor mode: no toc found
+process_no_toc
+start_index: 1
+divide page_list to groups 5
+start generate_toc_init
+start generate_toc_continue
+start generate_toc_continue
+start generate_toc_continue
+start generate_toc_continue
+Document validation: 86 pages, max allowed index: 86
+start verify_toc
+check all items
+accuracy: 100.00%
+Parsing done, saving to file...
+Tree structure saved to: ./results/DeepSeek_R1_structure.json
+
+-------------------------------------------------------------------------------------------
+
+python run_pageindex.py --pdf_path DeepSeek_R1.pdf --model gpt-5.1
+
+Parsing PDF...
+start find_toc_pages
+no toc found
+meta_processor mode: process_no_toc
+start_index: 1
+divide page_list to groups 5
+start generate_toc_init
+start generate_toc_continue
+start generate_toc_continue
+start generate_toc_continue
+start generate_toc_continue
+Document validation: 86 pages, max allowed index: 86
+start verify_toc
+check all items
+accuracy: 100.00%
+Parsing done, saving to file...
+Tree structure saved to: ./results/DeepSeek_R1_structure.json
+
+-------------------------------------------------------------------------------------------
+
+python run_pageindex.py --pdf_path DeepSeek_R1.pdf --model gpt-4.1-nano
+
+Parsing PDF...
+start find_toc_pages
+toc found
+start detect_page_index
+start find_toc_pages
+start detect_page_index
+index found
+meta_processor mode: process_toc_with_page_numbers
+start_index: 1
+start toc_transformer
+start toc_index_extractor
+start verify_toc
+meta_processor mode: process_toc_no_page_numbers
+start_index: 1
+start toc_transformer
+divide page_list to groups 5
+start verify_toc
+meta_processor mode: process_no_toc
+start_index: 1
+divide page_list to groups 5
+start generate_toc_init
+start generate_toc_continue
+start generate_toc_continue
+start generate_toc_continue
+start generate_toc_continue
+Document validation: 86 pages, max allowed index: 86
+start verify_toc
+check all items
+accuracy: 21.13%
+Traceback (most recent call last):
+  File "/home/os-chewei.chang/Projects/playground/PageIndex/run_pageindex.py", line 84, in <module>
+    toc_with_page_number = page_index_main(args.pdf_path, opt)
+  File "/home/os-chewei.chang/Projects/playground/PageIndex/pageindex_local/page_index.py", line 1165, in page_index_main
+    return asyncio.run(page_index_builder())
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/os-chewei.chang/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "/home/os-chewei.chang/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/home/os-chewei.chang/.local/share/uv/python/cpython-3.13.9-linux-x86_64-gnu/lib/python3.13/asyncio/base_events.py", line 725, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "/home/os-chewei.chang/Projects/playground/PageIndex/pageindex_local/page_index.py", line 1140, in page_index_builder
+    structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/os-chewei.chang/Projects/playground/PageIndex/pageindex_local/page_index.py", line 1080, in tree_parser
+    toc_with_page_number = await meta_processor(
+                           ^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+        logger=logger)
+        ^^^^^^^^^^^^^^
+  File "/home/os-chewei.chang/Projects/playground/PageIndex/pageindex_local/page_index.py", line 1029, in meta_processor
+    return await meta_processor(page_list, mode='process_toc_no_page_numbers', toc_content=toc_content, toc_page_list=toc_page_list, start_index=start_index, opt=opt, logger=logger)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/os-chewei.chang/Projects/playground/PageIndex/pageindex_local/page_index.py", line 1031, in meta_processor
+    return await meta_processor(page_list, mode='process_no_toc', start_index=start_index, opt=opt, logger=logger)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/os-chewei.chang/Projects/playground/PageIndex/pageindex_local/page_index.py", line 1033, in meta_processor
+    raise Exception('Processing failed')
+Exception: Processing failed

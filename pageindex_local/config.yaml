@@ -1,0 +1,14 @@
+model: "gpt-4o-2024-11-20"
+toc_check_page_num: 20
+max_page_num_each_node: 10
+max_token_num_each_node: 20000
+if_add_node_id: "yes"
+if_add_node_summary: "yes"
+if_add_doc_description: "no"
+if_add_node_text: "no"
+
+# Parallel request control
+parallel_requests: false           # Whether to enable parallel LLM requests
+max_concurrent_requests: 10       # Maximum number of concurrent requests
+retry_base_delay: 1.0             # Base delay for retry backoff (seconds)
+retry_max_delay: 60.0             # Maximum delay for retry backoff (seconds)

@@ -10,16 +10,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 ################### check title in page #########################################################
-async def check_title_appearance(item, page_list, start_index=1, model=None):    
+async def check_title_appearance(item, page_list, start_index=1, model=None, opt=None):
     title=item['title']
     if 'physical_index' not in item or item['physical_index'] is None:
         return {'list_index': item.get('list_index'), 'answer': 'no', 'title':title, 'page_number': None}
-    
-    
+
+
     page_number = item['physical_index']
     page_text = page_list[page_number-start_index][0]
 
-    
+
     prompt = f"""
     Your job is to check if the given section appears or starts in the given page_text.
 
@@ -27,16 +27,16 @@ async def check_title_appearance(item, page_list, start_index=1, model=None):
 
     The given section title is {title}.
     The given page_text is {page_text}.
-    
+
     Reply format:
     {{
-        
+
         "thinking": <why do you think the section appears or starts in the page_text>
         "answer": "yes or no" (yes if the section appears or starts in the page_text, no otherwise)
     }}
     Directly return the final JSON structure. Do not output anything else."""
 
-    response = await ChatGPT_API_async(model=model, prompt=prompt)
+    response = await ChatGPT_API_async(model=model, prompt=prompt, opt=opt)
     response = extract_json(response)
     if 'answer' in response:
         answer = response['answer']
@@ -45,7 +45,7 @@ async def check_title_appearance(item, page_list, start_index=1, model=None):
     return {'list_index': item['list_index'], 'answer': answer, 'title': title, 'page_number': page_number}
 
 
-async def check_title_appearance_in_start(title, page_text, model=None, logger=None):    
+async def check_title_appearance_in_start(title, page_text, model=None, logger=None, opt=None):
     prompt = f"""
     You will be given the current section title and the current page_text.
     Your job is to check if the current section starts in the beginning of the given page_text.
@@ -56,7 +56,7 @@ async def check_title_appearance_in_start(title, page_text, model=None, logger=N
 
     The given section title is {title}.
     The given page_text is {page_text}.
-    
+
     reply format:
     {{
         "thinking": <why do you think the section appears or starts in the page_text>
@@ -64,39 +64,58 @@ async def check_title_appearance_in_start(title, page_text, model=None, logger=N
     }}
     Directly return the final JSON structure. Do not output anything else."""
 
-    response = await ChatGPT_API_async(model=model, prompt=prompt)
+    response = await ChatGPT_API_async(model=model, prompt=prompt, opt=opt)
     response = extract_json(response)
     if logger:
         logger.info(f"Response: {response}")
     return response.get("start_begin", "no")
 
 
-async def check_title_appearance_in_start_concurrent(structure, page_list, model=None, logger=None):
+async def check_title_appearance_in_start_concurrent(structure, page_list, model=None, logger=None, opt=None):
     if logger:
         logger.info("Checking title appearance in start concurrently")
-    
+
     # skip items without physical_index
     for item in structure:
         if item.get('physical_index') is None:
             item['appear_start'] = 'no'
 
     # only for items with valid physical_index
-    tasks = []
     valid_items = []
     for item in structure:
         if item.get('physical_index') is not None:
-            page_text = page_list[item['physical_index'] - 1][0]
-            tasks.append(check_title_appearance_in_start(item['title'], page_text, model=model, logger=logger))
             valid_items.append(item)
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for item, result in zip(valid_items, results):
-        if isinstance(result, Exception):
-            if logger:
-                logger.error(f"Error checking start for {item['title']}: {result}")
-            item['appear_start'] = 'no'
-        else:
-            item['appear_start'] = result
+    if opt and not getattr(opt, 'parallel_requests', True):
+        # Sequential execution
+        for item in valid_items:
+            page_text = page_list[item['physical_index'] - 1][0]
+            try:
+                result = await check_title_appearance_in_start(item['title'], page_text, model=model, logger=logger, opt=opt)
+                item['appear_start'] = result
+            except Exception as e:
+                if logger:
+                    logger.error(f"Error checking start for {item['title']}: {e}")
+                item['appear_start'] = 'no'
+    else:
+        # Parallel execution with concurrency limit
+        max_concurrent = getattr(opt, 'max_concurrent_requests', 10) if opt else 10
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def limited_task(item):
+            async with semaphore:
+                page_text = page_list[item['physical_index'] - 1][0]
+                return await check_title_appearance_in_start(item['title'], page_text, model=model, logger=logger, opt=opt)
+
+        tasks = [limited_task(item) for item in valid_items]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for item, result in zip(valid_items, results):
+            if isinstance(result, Exception):
+                if logger:
+                    logger.error(f"Error checking start for {item['title']}: {result}")
+                item['appear_start'] = 'no'
+            else:
+                item['appear_start'] = result
 
     return structure
 
@@ -749,17 +768,17 @@ def single_toc_item_index_fixer(section_title, content, model="gpt-4o-2024-11-20
 
 
 
-async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, start_index=1, model=None, logger=None):
+async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, start_index=1, model=None, logger=None, opt=None):
     print(f'start fix_incorrect_toc with {len(incorrect_results)} incorrect results')
     incorrect_indices = {result['list_index'] for result in incorrect_results}
-    
+
     end_index = len(page_list) + start_index - 1
-    
+
     incorrect_results_and_range_logs = []
     # Helper function to process and check a single incorrect item
     async def process_and_check_item(incorrect_item):
         list_index = incorrect_item['list_index']
-        
+
         # Check if list_index is valid
         if list_index < 0 or list_index >= len(toc_with_page_number):
             # Return an invalid result for out-of-bounds indices
@@ -769,7 +788,7 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
                 'physical_index': incorrect_item.get('physical_index'),
                 'is_valid': False
             }
-        
+
         # Find the previous correct item
         prev_correct = None
         for i in range(list_index-1, -1, -1):
@@ -781,7 +800,7 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
         # If no previous correct item found, use start_index
         if prev_correct is None:
             prev_correct = start_index - 1
-        
+
         # Find the next correct item
         next_correct = None
         for i in range(list_index+1, len(toc_with_page_number)):
@@ -793,7 +812,7 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
         # If no next correct item found, use end_index
         if next_correct is None:
             next_correct = end_index
-        
+
         incorrect_results_and_range_logs.append({
             'list_index': list_index,
             'title': incorrect_item['title'],
@@ -811,13 +830,13 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
             else:
                 continue
         content_range = ''.join(page_contents)
-        
+
         physical_index_int = single_toc_item_index_fixer(incorrect_item['title'], content_range, model)
-        
+
         # Check if the result is correct
         check_item = incorrect_item.copy()
         check_item['physical_index'] = physical_index_int
-        check_result = await check_title_appearance(check_item, page_list, start_index, model)
+        check_result = await check_title_appearance(check_item, page_list, start_index, model, opt=opt)
 
         return {
             'list_index': list_index,
@@ -826,17 +845,31 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
             'is_valid': check_result['answer'] == 'yes'
         }
 
-    # Process incorrect items concurrently
-    tasks = [
-        process_and_check_item(item)
-        for item in incorrect_results
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for item, result in zip(incorrect_results, results):
-        if isinstance(result, Exception):
-            print(f"Processing item {item} generated an exception: {result}")
-            continue
-    results = [result for result in results if not isinstance(result, Exception)]
+    if opt and not getattr(opt, 'parallel_requests', True):
+        # Sequential execution
+        results = []
+        for item in incorrect_results:
+            try:
+                result = await process_and_check_item(item)
+                results.append(result)
+            except Exception as e:
+                print(f"Processing item {item} generated an exception: {e}")
+    else:
+        # Parallel execution with concurrency limit
+        max_concurrent = getattr(opt, 'max_concurrent_requests', 10) if opt else 10
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def limited_task(item):
+            async with semaphore:
+                return await process_and_check_item(item)
+
+        tasks = [limited_task(item) for item in incorrect_results]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for item, result in zip(incorrect_results, results):
+            if isinstance(result, Exception):
+                print(f"Processing item {item} generated an exception: {result}")
+                continue
+        results = [result for result in results if not isinstance(result, Exception)]
 
     # Update the toc_with_page_number with the fixed indices and check for any invalid results
     invalid_results = []
@@ -867,7 +900,7 @@ async def fix_incorrect_toc(toc_with_page_number, page_list, incorrect_results, 
 
 
 
-async def fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_results, start_index=1, max_attempts=3, model=None, logger=None):
+async def fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_results, start_index=1, max_attempts=3, model=None, logger=None, opt=None):
     print('start fix_incorrect_toc')
     fix_attempt = 0
     current_toc = toc_with_page_number
@@ -875,21 +908,21 @@ async def fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorr
 
     while current_incorrect:
         print(f"Fixing {len(current_incorrect)} incorrect results")
-        
-        current_toc, current_incorrect = await fix_incorrect_toc(current_toc, page_list, current_incorrect, start_index, model, logger)
-                
+
+        current_toc, current_incorrect = await fix_incorrect_toc(current_toc, page_list, current_incorrect, start_index, model, logger, opt=opt)
+
         fix_attempt += 1
         if fix_attempt >= max_attempts:
             logger.info("Maximum fix attempts reached")
             break
-    
+
     return current_toc, current_incorrect
 
 
 
 
 ################### verify toc #########################################################
-async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
+async def verify_toc(page_list, list_result, start_index=1, N=None, model=None, opt=None):
     print('start verify_toc')
     # Find the last non-None physical_index
     last_physical_index = None
@@ -897,11 +930,11 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
         if item.get('physical_index') is not None:
             last_physical_index = item['physical_index']
             break
-    
+
     # Early return if we don't have valid physical indices
     if last_physical_index is None or last_physical_index < len(page_list)/2:
         return 0, []
-    
+
     # Determine which items to check
     if N is None:
         print('check all items')
@@ -921,13 +954,24 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
             item_with_index['list_index'] = idx  # Add the original index in list_result
             indexed_sample_list.append(item_with_index)
 
-    # Run checks concurrently
-    tasks = [
-        check_title_appearance(item, page_list, start_index, model)
-        for item in indexed_sample_list
-    ]
-    results = await asyncio.gather(*tasks)
-    
+    if opt and not getattr(opt, 'parallel_requests', True):
+        # Sequential execution
+        results = []
+        for item in indexed_sample_list:
+            result = await check_title_appearance(item, page_list, start_index, model, opt=opt)
+            results.append(result)
+    else:
+        # Parallel execution with concurrency limit
+        max_concurrent = getattr(opt, 'max_concurrent_requests', 10) if opt else 10
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def limited_task(item):
+            async with semaphore:
+                return await check_title_appearance(item, page_list, start_index, model, opt=opt)
+
+        tasks = [limited_task(item) for item in indexed_sample_list]
+        results = await asyncio.gather(*tasks)
+
     # Process results
     correct_count = 0
     incorrect_results = []
@@ -936,7 +980,7 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
             correct_count += 1
         else:
             incorrect_results.append(result)
-    
+
     # Calculate accuracy
     checked_count = len(results)
     accuracy = correct_count / checked_count if checked_count > 0 else 0
@@ -949,27 +993,27 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
 
 ################### main process #########################################################
 async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=None, start_index=1, opt=None, logger=None):
-    print(mode)
+    print(f"meta_processor mode: {mode}")
     print(f'start_index: {start_index}')
-    
+
     if mode == 'process_toc_with_page_numbers':
         toc_with_page_number = process_toc_with_page_numbers(toc_content, toc_page_list, page_list, toc_check_page_num=opt.toc_check_page_num, model=opt.model, logger=logger)
     elif mode == 'process_toc_no_page_numbers':
         toc_with_page_number = process_toc_no_page_numbers(toc_content, toc_page_list, page_list, model=opt.model, logger=logger)
     else:
         toc_with_page_number = process_no_toc(page_list, start_index=start_index, model=opt.model, logger=logger)
-            
-    toc_with_page_number = [item for item in toc_with_page_number if item.get('physical_index') is not None] 
-    
+
+    toc_with_page_number = [item for item in toc_with_page_number if item.get('physical_index') is not None]
+
     toc_with_page_number = validate_and_truncate_physical_indices(
-        toc_with_page_number, 
-        len(page_list), 
-        start_index=start_index, 
+        toc_with_page_number,
+        len(page_list),
+        start_index=start_index,
         logger=logger
     )
-    
-    accuracy, incorrect_results = await verify_toc(page_list, toc_with_page_number, start_index=start_index, model=opt.model)
-        
+
+    accuracy, incorrect_results = await verify_toc(page_list, toc_with_page_number, start_index=start_index, model=opt.model, opt=opt)
+
     logger.info({
         'mode': 'process_toc_with_page_numbers',
         'accuracy': accuracy,
@@ -978,7 +1022,7 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
     if accuracy == 1.0 and len(incorrect_results) == 0:
         return toc_with_page_number
     if accuracy > 0.6 and len(incorrect_results) > 0:
-        toc_with_page_number, incorrect_results = await fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_results,start_index=start_index, max_attempts=3, model=opt.model, logger=logger)
+        toc_with_page_number, incorrect_results = await fix_incorrect_toc_with_retries(toc_with_page_number, page_list, incorrect_results, start_index=start_index, max_attempts=3, model=opt.model, logger=logger, opt=opt)
         return toc_with_page_number
     else:
         if mode == 'process_toc_with_page_numbers':
@@ -992,30 +1036,40 @@ async def meta_processor(page_list, mode=None, toc_content=None, toc_page_list=N
 async def process_large_node_recursively(node, page_list, opt=None, logger=None):
     node_page_list = page_list[node['start_index']-1:node['end_index']]
     token_num = sum([page[1] for page in node_page_list])
-    
+
     if node['end_index'] - node['start_index'] > opt.max_page_num_each_node and token_num >= opt.max_token_num_each_node:
         print('large node:', node['title'], 'start_index:', node['start_index'], 'end_index:', node['end_index'], 'token_num:', token_num)
 
         node_toc_tree = await meta_processor(node_page_list, mode='process_no_toc', start_index=node['start_index'], opt=opt, logger=logger)
-        node_toc_tree = await check_title_appearance_in_start_concurrent(node_toc_tree, page_list, model=opt.model, logger=logger)
-        
+        node_toc_tree = await check_title_appearance_in_start_concurrent(node_toc_tree, page_list, model=opt.model, logger=logger, opt=opt)
+
         # Filter out items with None physical_index before post_processing
         valid_node_toc_items = [item for item in node_toc_tree if item.get('physical_index') is not None]
-        
+
         if valid_node_toc_items and node['title'].strip() == valid_node_toc_items[0]['title'].strip():
             node['nodes'] = post_processing(valid_node_toc_items[1:], node['end_index'])
             node['end_index'] = valid_node_toc_items[1]['start_index'] if len(valid_node_toc_items) > 1 else node['end_index']
         else:
             node['nodes'] = post_processing(valid_node_toc_items, node['end_index'])
             node['end_index'] = valid_node_toc_items[0]['start_index'] if valid_node_toc_items else node['end_index']
-        
+
     if 'nodes' in node and node['nodes']:
-        tasks = [
-            process_large_node_recursively(child_node, page_list, opt, logger=logger)
-            for child_node in node['nodes']
-        ]
-        await asyncio.gather(*tasks)
-    
+        if opt and not getattr(opt, 'parallel_requests', True):
+            # Sequential execution
+            for child_node in node['nodes']:
+                await process_large_node_recursively(child_node, page_list, opt, logger=logger)
+        else:
+            # Parallel execution with concurrency limit
+            max_concurrent = getattr(opt, 'max_concurrent_requests', 10) if opt else 10
+            semaphore = asyncio.Semaphore(max_concurrent)
+
+            async def limited_task(child_node):
+                async with semaphore:
+                    return await process_large_node_recursively(child_node, page_list, opt, logger=logger)
+
+            tasks = [limited_task(child_node) for child_node in node['nodes']]
+            await asyncio.gather(*tasks)
+
     return node
 
 async def tree_parser(page_list, opt, doc=None, logger=None):
@@ -1024,34 +1078,45 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
 
     if check_toc_result.get("toc_content") and check_toc_result["toc_content"].strip() and check_toc_result["page_index_given_in_toc"] == "yes":
         toc_with_page_number = await meta_processor(
-            page_list, 
-            mode='process_toc_with_page_numbers', 
-            start_index=1, 
-            toc_content=check_toc_result['toc_content'], 
-            toc_page_list=check_toc_result['toc_page_list'], 
+            page_list,
+            mode='process_toc_with_page_numbers',
+            start_index=1,
+            toc_content=check_toc_result['toc_content'],
+            toc_page_list=check_toc_result['toc_page_list'],
             opt=opt,
             logger=logger)
     else:
         toc_with_page_number = await meta_processor(
-            page_list, 
-            mode='process_no_toc', 
-            start_index=1, 
+            page_list,
+            mode='process_no_toc',
+            start_index=1,
             opt=opt,
             logger=logger)
 
     toc_with_page_number = add_preface_if_needed(toc_with_page_number)
-    toc_with_page_number = await check_title_appearance_in_start_concurrent(toc_with_page_number, page_list, model=opt.model, logger=logger)
-    
+    toc_with_page_number = await check_title_appearance_in_start_concurrent(toc_with_page_number, page_list, model=opt.model, logger=logger, opt=opt)
+
     # Filter out items with None physical_index before post_processings
     valid_toc_items = [item for item in toc_with_page_number if item.get('physical_index') is not None]
-    
+
     toc_tree = post_processing(valid_toc_items, len(page_list))
-    tasks = [
-        process_large_node_recursively(node, page_list, opt, logger=logger)
-        for node in toc_tree
-    ]
-    await asyncio.gather(*tasks)
-    
+
+    if opt and not getattr(opt, 'parallel_requests', True):
+        # Sequential execution
+        for node in toc_tree:
+            await process_large_node_recursively(node, page_list, opt, logger=logger)
+    else:
+        # Parallel execution with concurrency limit
+        max_concurrent = getattr(opt, 'max_concurrent_requests', 10) if opt else 10
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def limited_task(node):
+            async with semaphore:
+                return await process_large_node_recursively(node, page_list, opt, logger=logger)
+
+        tasks = [limited_task(node) for node in toc_tree]
+        await asyncio.gather(*tasks)
+
     return toc_tree
 
 
@@ -1074,13 +1139,13 @@ def page_index_main(doc, opt=None):
     async def page_index_builder():
         structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
         if opt.if_add_node_id == 'yes':
-            write_node_id(structure)    
+            write_node_id(structure)
         if opt.if_add_node_text == 'yes':
             add_node_text(structure, page_list)
         if opt.if_add_node_summary == 'yes':
             if opt.if_add_node_text == 'no':
                 add_node_text(structure, page_list)
-            await generate_summaries_for_structure(structure, model=opt.model)
+            await generate_summaries_for_structure(structure, model=opt.model, opt=opt)
             if opt.if_add_node_text == 'no':
                 remove_structure_text(structure)
             if opt.if_add_doc_description == 'yes':

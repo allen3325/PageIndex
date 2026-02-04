@@ -1,8 +1,8 @@
 import argparse
 import os
 import json
-from pageindex import *
-from pageindex.page_index_md import md_to_tree
+from pageindex_local import *
+from pageindex_local.page_index_md import md_to_tree
 
 if __name__ == "__main__":
     # Set up argument parser
@@ -10,7 +10,10 @@ if __name__ == "__main__":
     parser.add_argument('--pdf_path', type=str, help='Path to the PDF file')
     parser.add_argument('--md_path', type=str, help='Path to the Markdown file')
 
-    parser.add_argument('--model', type=str, default='gpt-4o-2024-11-20', help='Model to use')
+    parser.add_argument('--model', type=str, default='gpt-4o-2024-11-20',
+                      help='Model to use. Supports: OpenAI (gpt-4o, gpt-4-turbo, etc.), '
+                           'Anthropic (claude-sonnet-4-20250514, claude-3-5-sonnet-20241022, etc.), '
+                           'Google (gemini-2.0-flash, gemini-1.5-pro, etc.)')
 
     parser.add_argument('--toc-check-pages', type=int, default=20, 
                       help='Number of pages to check for table of contents (PDF only)')
@@ -23,9 +26,9 @@ if __name__ == "__main__":
                       help='Whether to add node id to the node')
     parser.add_argument('--if-add-node-summary', type=str, default='yes',
                       help='Whether to add summary to the node')
-    parser.add_argument('--if-add-doc-description', type=str, default='no',
+    parser.add_argument('--if-add-doc-description', type=str, default='yes',
                       help='Whether to add doc description to the doc')
-    parser.add_argument('--if-add-node-text', type=str, default='no',
+    parser.add_argument('--if-add-node-text', type=str, default='yes',
                       help='Whether to add text to the node')
                       
     # Markdown specific arguments
@@ -35,6 +38,16 @@ if __name__ == "__main__":
                       help='Minimum token threshold for thinning (markdown only)')
     parser.add_argument('--summary-token-threshold', type=int, default=200,
                       help='Token threshold for generating summaries (markdown only)')
+
+    # Parallel request control
+    parser.add_argument('--parallel-requests', type=str, default='no',
+                      help='Enable parallel LLM requests (yes/no)')
+    parser.add_argument('--max-concurrent-requests', type=int, default=1,
+                      help='Maximum number of concurrent requests')
+    parser.add_argument('--retry-base-delay', type=float, default=1.0,
+                      help='Base delay for retry backoff (seconds)')
+    parser.add_argument('--retry-max-delay', type=float, default=60.0,
+                      help='Maximum delay for retry backoff (seconds)')
     args = parser.parse_args()
     
     # Validate that exactly one file type is specified
@@ -60,7 +73,11 @@ if __name__ == "__main__":
             if_add_node_id=args.if_add_node_id,
             if_add_node_summary=args.if_add_node_summary,
             if_add_doc_description=args.if_add_doc_description,
-            if_add_node_text=args.if_add_node_text
+            if_add_node_text=args.if_add_node_text,
+            parallel_requests=args.parallel_requests.lower() == 'yes',
+            max_concurrent_requests=args.max_concurrent_requests,
+            retry_base_delay=args.retry_base_delay,
+            retry_max_delay=args.retry_max_delay
         )
 
         # Process the PDF
@@ -92,7 +109,7 @@ if __name__ == "__main__":
         import asyncio
         
         # Use ConfigLoader to get consistent defaults (matching PDF behavior)
-        from pageindex.utils import ConfigLoader
+        from pageindex_local.utils import ConfigLoader
         config_loader = ConfigLoader()
         
         # Create options dict with user args
@@ -101,12 +118,16 @@ if __name__ == "__main__":
             'if_add_node_summary': args.if_add_node_summary,
             'if_add_doc_description': args.if_add_doc_description,
             'if_add_node_text': args.if_add_node_text,
-            'if_add_node_id': args.if_add_node_id
+            'if_add_node_id': args.if_add_node_id,
+            'parallel_requests': args.parallel_requests.lower() == 'yes',
+            'max_concurrent_requests': args.max_concurrent_requests,
+            'retry_base_delay': args.retry_base_delay,
+            'retry_max_delay': args.retry_max_delay
         }
-        
+
         # Load config with defaults from config.yaml
         opt = config_loader.load(user_opt)
-        
+
         toc_with_page_number = asyncio.run(md_to_tree(
             md_path=args.md_path,
             if_thinning=args.if_thinning.lower() == 'yes',
@@ -116,7 +137,8 @@ if __name__ == "__main__":
             model=opt.model,
             if_add_doc_description=opt.if_add_doc_description,
             if_add_node_text=opt.if_add_node_text,
-            if_add_node_id=opt.if_add_node_id
+            if_add_node_id=opt.if_add_node_id,
+            opt=opt
         ))
         
         print('Parsing done, saving to file...')
