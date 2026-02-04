@@ -8,7 +8,7 @@ if_add_doc_description: "no"
 if_add_node_text: "no"
 
 # Parallel request control
-parallel_requests: true           # Whether to enable parallel LLM requests
+parallel_requests: false           # Whether to enable parallel LLM requests
 max_concurrent_requests: 10       # Maximum number of concurrent requests
 retry_base_delay: 1.0             # Base delay for retry backoff (seconds)
 retry_max_delay: 60.0             # Maximum delay for retry backoff (seconds)

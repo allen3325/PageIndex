@@ -40,9 +40,9 @@ if __name__ == "__main__":
                       help='Token threshold for generating summaries (markdown only)')
 
     # Parallel request control
-    parser.add_argument('--parallel-requests', type=str, default='yes',
+    parser.add_argument('--parallel-requests', type=str, default='no',
                       help='Enable parallel LLM requests (yes/no)')
-    parser.add_argument('--max-concurrent-requests', type=int, default=10,
+    parser.add_argument('--max-concurrent-requests', type=int, default=1,
                       help='Maximum number of concurrent requests')
     parser.add_argument('--retry-base-delay', type=float, default=1.0,
                       help='Base delay for retry backoff (seconds)')
